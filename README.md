@@ -5,6 +5,11 @@
 1. [安装pdm](https://pdm-project.org/en/latest/#__tabbed_1_1)
 2. 安装依赖 `pdm install` .
 3. 启动 bot `pdm run nb run` .
+4. 升级数据库 `pdm run nb orm upgrade`
+
+## 使用 docker
+1. `docker build .`
+2. `docker run <image>`
 
 ## 官方文档
 
