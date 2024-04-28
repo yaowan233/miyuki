@@ -1,4 +1,6 @@
 # miyuki
+miyuki大部分插件都使用了 [nonebot_plugin_alconna](https://github.com/nonebot/plugin-alconna) 进行消息发送，理论上支持大部分适配器，你可以根据需求，[自行选择适配器](https://nonebot.dev/store/adapters)
+
 
 ## 启动步骤
 
