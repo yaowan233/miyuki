@@ -8,7 +8,6 @@ from nonebot.plugin import PluginMetadata, require
 from nonebot import on_message, get_bot, Bot, on_command
 from wordcloud import WordCloud
 
-require('nonebot_plugin_saa')
 require('nonebot_plugin_tortoise_orm')
 require('nonebot_plugin_session')
 require('nonebot_plugin_alconna')
@@ -20,7 +19,7 @@ from nonebot.exception import ActionFailed
 from nonebot.params import Arg, CommandArg
 from nonebot.rule import Rule
 from nonebot.typing import T_State
-from nonebot_plugin_session import SessionId, SessionIdType, EventSession
+from nonebot_plugin_session import EventSession
 from nonebot_plugin_alconna import UniMessage
 
 from .handler import LearningChat

@@ -8,8 +8,6 @@ from nonebot import on_command
 from nonebot.internal.adapter import Message
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
-# from nonebot.adapters.red.message import MessageSegment as RedMessageSegment
-# from nonebot.adapters.onebot.v11 import MessageEvent as v11MessageEvent
 
 __plugin_meta__ = PluginMetadata(
     name='sayoroll',
