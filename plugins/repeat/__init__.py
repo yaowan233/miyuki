@@ -84,7 +84,7 @@ async def _(session: EventSession, arg: Message = CommandArg()):
     words = ' '.join(ans)
     for i in stop_words:
         words = words.replace(i, '')
-    wc = WordCloud(font_path=Path(__file__).parent / "SourceHanSans.otf", width=1000, height=500).generate(words).to_image()
+    wc = WordCloud(font_path=str(Path(__file__).parent / "SourceHanSans.otf"), width=1000, height=500).generate(words).to_image()
     image_bytes = BytesIO()
     wc.save(image_bytes, format="PNG")
     await UniMessage.image(raw=image_bytes).send(reply_to=True)
