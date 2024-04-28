@@ -2,10 +2,12 @@ import asyncio
 import random
 import time
 from io import BytesIO
+from pathlib import Path
 
 from nonebot.plugin import PluginMetadata, require
 from nonebot import on_message, get_bot, Bot, on_command
 from wordcloud import WordCloud
+
 require('nonebot_plugin_saa')
 require('nonebot_plugin_tortoise_orm')
 require('nonebot_plugin_session')
@@ -27,12 +29,10 @@ from .config import config_manager
 from .logger import logger
 from . import web_api, web_page
 
-
 require('nonebot_plugin_apscheduler')
 from nonebot_plugin_apscheduler import scheduler
 
 NICKNAME = 'miyuki'
-SUPERUSERS = (572473053,)
 __plugin_meta__ = PluginMetadata(
     name='群聊学习',
     description='群聊学习',
@@ -70,6 +70,8 @@ learning_chat = on_message(priority=99, block=True, rule=Rule(ChatRule), state={
 })
 
 frequency = on_command('词频')
+
+
 @frequency.handle()
 async def _(session: EventSession, arg: Message = CommandArg()):
     group = session.id2
@@ -78,11 +80,12 @@ async def _(session: EventSession, arg: Message = CommandArg()):
         arg = '1'
     if not arg.isdigit():
         await frequency.finish('统计范围应为纯数字')
-    ans = await ChatAnswer.filter(group_id=group, time__gte=int(time.time()) - 3600 * 24 * int(arg)).values_list('keywords', flat=True)
+    ans = await ChatAnswer.filter(group_id=group, time__gte=int(time.time()) - 3600 * 24 * int(arg)).values_list(
+        'keywords', flat=True)
     words = ' '.join(ans)
     for i in stop_words:
         words = words.replace(i, '')
-    wc = WordCloud(font_path='C:\\Windows\\Fonts\\msyh.ttc', width=1000, height=500).generate(words).to_image()
+    wc = WordCloud(font_path=Path(__file__).parent / "SourceHanSans.otf", width=1000, height=500).generate(words).to_image()
     image_bytes = BytesIO()
     wc.save(image_bytes, format="PNG")
     await UniMessage.image(raw=image_bytes).send(reply_to=True)
@@ -96,7 +99,7 @@ async def _(bot: Bot, event: Event, session: EventSession, answers=Arg('answers'
             await learning_chat.send(answer)
             await ChatMessage.create(
                 group_id=session.id2,
-                user_id=1784933404,
+                user_id=bot.self_id,
                 message_id=UniMessage.get_message_id(event, bot),
                 message=answer,
                 raw_message=answer,
@@ -106,7 +109,6 @@ async def _(bot: Bot, event: Event, session: EventSession, answers=Arg('answers'
             await asyncio.sleep(random.random() + 0.5)
         except ActionFailed:
             logger.info(f'{NICKNAME}向群{session.id2}<的回复<m>"{answer}"发送失败，可能处于风控中')
-
 
 # @scheduler.scheduled_job('interval', minutes=3, misfire_grace_time=5)
 # async def speak_up():
