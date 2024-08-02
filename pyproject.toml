@@ -1,6 +1,6 @@
 [project]
 name = "miyuki"
-version = "0.1.0"
+version = "0.1.1"
 description = "这是miyuki"
 readme = "README.md"
 requires-python = "<3.13,>=3.9.8"
@@ -9,7 +9,7 @@ authors = [
 ]
 dependencies = [
     "nonebot-plugin-sentry>=1.1.0",
-    "nonebot-plugin-osubot>=5.7.0",
+    "nonebot-plugin-osubot>=6.7.0",
     "nonebot-plugin-memes-api>=0.3.2",
     "nonebot-plugin-eventexpiry>=0.1.1",
     "nonebot-plugin-handle>=0.4.1",
@@ -19,7 +19,7 @@ dependencies = [
     "nonebot-plugin-chess>=0.5.0",
     "nonebot-plugin-heweather>=0.8.2",
     "nonebot-plugin-picstatus>=2.0.0.post4",
-    "nonebot-adapter-satori>=0.10.4",
+    "nonebot-adapter-satori>=0.12.3",
     "wordcloud>=1.9.3",
     "ssttkkl-nonebot-utils>=0.1.19",
     "python-multipart>=0.0.9",
@@ -33,6 +33,12 @@ dependencies = [
     "nb-cli>=1.4.1",
     "nonebot-plugin-shindan>=0.6.1",
     "nonebot-plugin-datastore>=1.2.0",
+    "nonebot-plugin-anime-downloader>=0.2.1",
+    "nonebot-plugin-tsugu-bangdream-bot>=0.1.5",
+    "nonebot-plugin-mahjong-utils>=0.4.5",
+    "nonebot-plugin-mahjong-hand-guess>=0.4.3",
+    "nonebot-plugin-wordle>=0.4.1",
+    "nonebot-plugin-sayoroll>=1.0.4",
 ]
 license = {text = "MIT"}
 
@@ -43,7 +49,7 @@ adapters = [
 #    { name = "RedProtocol", module_name = "nonebot.adapters.red" }
 #    {name = "Satori", module_name = "nonebot.adapters.satori"},
 ]
-plugins = ["nonebot_plugin_sentry", "nonebot_plugin_osubot", "nonebot_plugin_memes_api", "nonebot_plugin_eventexpiry", "nonebot_plugin_handle", "nonebot_plugin_remake", "nonebot_plugin_treehelp", "nonebot_plugin_userinfo", "nonebot_plugin_ddcheck", "nonebot_plugin_chess", "nonebot_plugin_alconna", "nonebot_plugin_heweather", "nonebot_plugin_picstatus", "nonebot_plugin_shindan"]
+plugins = ["nonebot_plugin_sentry", "nonebot_plugin_osubot", "nonebot_plugin_memes_api", "nonebot_plugin_eventexpiry", "nonebot_plugin_handle", "nonebot_plugin_remake", "nonebot_plugin_treehelp", "nonebot_plugin_userinfo", "nonebot_plugin_ddcheck", "nonebot_plugin_chess", "nonebot_plugin_alconna", "nonebot_plugin_heweather", "nonebot_plugin_picstatus", "nonebot_plugin_shindan", "nonebot_plugin_mahjong_utils", "nonebot_plugin_wordle", "nonebot_plugin_mahjong_hand_guess", "nonebot_plugin_sayoroll", "nonebot_plugin_tsugu_bangdream_bot"]
 plugin_dirs = ["plugins"]
 builtin_plugins = ["echo"]
 
