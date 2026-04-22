@@ -1,9 +1,9 @@
 [project]
 name = "clean"
-version = "0.1.0"
+version = "1.0.0"
 description = "Default template for PDM package"
 readme = "README.md"
-requires-python = "<3.13,>=3.10"
+requires-python = "<3.15,>=3.10"
 authors = [
     {name = "yaowan233", email = "572473053@qq.com"},
 ]
