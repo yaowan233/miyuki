@@ -2,9 +2,8 @@ import nonebot
 
 from fastapi import FastAPI, UploadFile, File
 from expiringdict import ExpiringDict
-from nonebot import on_command, require
+from nonebot import on_command
 from nonebot.plugin import PluginMetadata
-require('nonebot_plugin_alconna')
 from nonebot_plugin_alconna import UniMessage
 
 

@@ -1,0 +1,20 @@
+version: "3"
+
+x-config-host: &config-host ${HOST:-0.0.0.0}
+x-config-port: &config-port ${PORT:-8080}
+
+services:
+  nonebot:
+    build: .
+    ports:
+      - *config-port
+    env_file:
+      - .env.prod
+    volumes:
+      - ./data:/app/data
+             -  ./plugin_data:/root/.local/share/nonebot2
+    environment:
+      ENVIRONMENT: prod
+      HOST: *config-host
+      PORT: *config-port
+    restart: always

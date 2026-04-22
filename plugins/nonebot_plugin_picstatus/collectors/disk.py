@@ -1,0 +1,127 @@
+from dataclasses import dataclass
+from typing import TypeAlias
+
+import psutil
+from psutil._ntuples import sdiskio, sdiskpart
+
+from ..config import config
+from ..util import match_list_regexp
+from . import (
+    BaseTimeBasedCounterCollector,
+    NormalTimeBasedCounterCollector,
+    PeriodicTimeBasedCounterCollector,
+    collector,
+    normal_collector,
+    periodic_collector,
+)
+
+
+@dataclass
+class DiskUsageNormal:
+    name: str
+    percent: float
+    used: int
+    total: int
+
+
+@dataclass
+class DiskUsageWithExc:
+    name: str
+    exception: str
+
+
+DiskUsageType: TypeAlias = DiskUsageNormal | DiskUsageWithExc
+
+
+@dataclass
+class DiskIO:
+    name: str
+    read: float
+    write: float
+
+
+@periodic_collector()
+async def get_disk_usage() -> list[DiskUsageType]:
+    def get_one(disk: sdiskpart) -> DiskUsageType | None:
+        mountpoint = disk.mountpoint
+
+        if match_list_regexp(config.ps_ignore_parts, mountpoint):
+            # logger.info(f"空间读取 分区 {mountpoint} 匹配 {regex.re.pattern}，忽略")
+            return None
+
+        try:
+            usage = psutil.disk_usage(mountpoint)
+        except Exception as e:
+            # logger.exception(f"读取 {mountpoint} 占用失败")
+            return (
+                None
+                if config.ps_ignore_bad_parts
+                else DiskUsageWithExc(name=mountpoint, exception=str(e))
+            )
+
+        return DiskUsageNormal(
+            name=mountpoint,
+            percent=usage.percent,
+            used=usage.used,
+            total=usage.total,
+        )
+
+    usage = [x for x in map(get_one, psutil.disk_partitions()) if x]
+    if config.ps_sort_parts:
+        usage.sort(
+            key=lambda x: x.percent if isinstance(x, DiskUsageNormal) else -1,
+            reverse=not config.ps_sort_parts_reverse,
+        )
+
+    return usage
+
+
+normal_collector("disk_usage")(get_disk_usage)
+periodic_collector("disk_usage_periodic")(get_disk_usage)
+
+
+class BaseDiskIOCollector(
+    BaseTimeBasedCounterCollector[dict[str, sdiskio], list[DiskIO]],
+):
+    async def _calc(
+        self,
+        past: dict[str, sdiskio],
+        now: dict[str, sdiskio],
+        time_passed: float,
+    ) -> list[DiskIO]:
+        def calc_one(name: str, past_it: sdiskio, now_it: sdiskio) -> DiskIO | None:
+            if match_list_regexp(config.ps_ignore_disk_ios, name):
+                # logger.info(f"IO统计 磁盘 {name} 匹配 {regex.re.pattern}，忽略")
+                return None
+
+            read = (now_it.read_bytes - past_it.read_bytes) / time_passed
+            write = (now_it.write_bytes - past_it.write_bytes) / time_passed
+
+            if read == 0 and write == 0 and config.ps_ignore_no_io_disk:
+                # logger.info(f"IO统计 忽略无IO磁盘 {name}")
+                return None
+
+            return DiskIO(name=name, read=read, write=write)
+
+        res = [calc_one(name, past[name], now[name]) for name in past if name in now]
+        res = [x for x in res if x]
+        if config.ps_sort_disk_ios:
+            res.sort(key=lambda x: x.read + x.write, reverse=True)
+        return res
+
+    async def _get_obj(self) -> dict[str, sdiskio]:
+        return psutil.disk_io_counters(perdisk=True)
+
+
+@collector("disk_io")
+class NormalDiskIOCollector(
+    BaseDiskIOCollector,
+    NormalTimeBasedCounterCollector[dict[str, sdiskio], list[DiskIO]],
+): ...
+
+
+@collector("disk_io_periodic")
+class PeriodicDiskIOCollector(
+    BaseDiskIOCollector,
+    PeriodicTimeBasedCounterCollector[dict[str, sdiskio], list[DiskIO]],
+): ...
