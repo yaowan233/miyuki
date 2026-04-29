@@ -10,18 +10,26 @@ import asyncio
 import time
 from typing import Any
 
-from nonebot import get_bots, get_driver, logger
+from nonebot import get_bots, get_driver, get_plugin_config, logger
 from nonebot.adapters import Bot, Event
 
 from .balancer import get_balancer
-from .config import Config
+from .config import Config, ScopedConfig
+
+_config: ScopedConfig | None = None
+
+
+def _get_config() -> ScopedConfig:
+    global _config
+    if _config is None:
+        _config = get_plugin_config(Config).bot_load_balancer
+    return _config
 
 
 class BotEventInterceptor:
     """Event dispatch interceptor for session-level load balancing."""
 
-    def __init__(self, config: Config):
-        self.config = config
+    def __init__(self):
         self._original_handle_event_methods: dict[type[Bot], Any] = {}
         self._original_send_methods: dict[type[Bot], Any] = {}
         self._original_call_api_methods: dict[type[Bot], Any] = {}
@@ -100,7 +108,7 @@ class BotEventInterceptor:
             raw_message = getattr(event, "raw_message", None) or str(
                 getattr(event, "message", "")
             )
-            for skip_cmd in self.config.skip_balance_commands:
+            for skip_cmd in _get_config().skip_balance_commands:
                 if raw_message.strip().startswith(f"/{skip_cmd}") or raw_message.strip().startswith(skip_cmd):
                     logger.debug(
                         f"[Bot Load Balancer] Skipping load balance for command: {skip_cmd}"
@@ -285,8 +293,8 @@ class BotEventInterceptor:
                     __original_handle_event=original_handle_event,
                 ):
                     # In 'send' mode, deduplicate events but allow @bot, skip_balance_commands, and normal chat
-                    if self.config.balance_mode == "send":
-                        primary_bot_ids = self.config.primary_bot_id_list
+                    if _get_config().balance_mode == "send":
+                        primary_bot_ids = _get_config().primary_bot_id_list
                         # If no primary bots configured, all bots can handle events
                         if primary_bot_ids and bot_self.self_id not in primary_bot_ids:
                             # Not a primary bot, skip this event
@@ -310,9 +318,15 @@ class BotEventInterceptor:
                                     is_command = True
                                     break
                             
-                            # Check if it's a skip_balance command
-                            for skip_cmd in self.config.skip_balance_commands:
-                                if stripped.startswith(f"{skip_cmd}") or stripped == skip_cmd:
+                            # Check if it's a skip_balance command (with or without prefix)
+                            content = stripped
+                            for prefix in self._command_start:
+                                if stripped.startswith(prefix):
+                                    content = stripped[len(prefix):].lstrip()
+                                    break
+                            
+                            for skip_cmd in _get_config().skip_balance_commands:
+                                if content.startswith(skip_cmd) or content == skip_cmd or stripped == skip_cmd or stripped.startswith(skip_cmd):
                                     is_skip_command = True
                                     logger.debug(
                                         f"[Bot Load Balancer] Message matches skip_balance_commands: {skip_cmd}"
@@ -446,7 +460,7 @@ class BotEventInterceptor:
                             session_id = str(data["user_id"])
                         
                         # In 'send' mode, select a different bot to actually send
-                        if interceptor_self.config.balance_mode == "send" and session_id:
+                        if _get_config().balance_mode == "send" and session_id:
                             try:
                                 # Filter bots: only those in the target group (if it's a group message)
                                 # or those who have the user as friend (if it's a private message)
@@ -484,7 +498,7 @@ class BotEventInterceptor:
                                 selected_bot = await balancer.select_bot(
                                     session_id,
                                     candidate_bots=candidate_bots,
-                                    sticky=interceptor_self.config.sticky_session,
+                                    sticky=_get_config().sticky_session,
                                 )
                                 
                                 logger.info(
@@ -576,8 +590,8 @@ def get_interceptor() -> BotEventInterceptor:
     return _interceptor
 
 
-def init_interceptor(config: Config):
-    """Initialize the global interceptor instance."""
+def init_interceptor():
+    """Initialize the global interceptor instance"""
     global _interceptor
-    _interceptor = BotEventInterceptor(config)
+    _interceptor = BotEventInterceptor()
     logger.success("[Bot Load Balancer] Interceptor initialized")

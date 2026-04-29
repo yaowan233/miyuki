@@ -13,8 +13,6 @@ Configuration (in .env):
 - bot_load_balancer__enabled: Enable/disable load balancing (default: True)
 - bot_load_balancer__sticky_session: Enable sticky sessions (default: False)
 - bot_load_balancer__min_reply_interval: Minimum seconds between replies (default: 5.0)
-
-This plugin is completely independent and requires no modifications to existing code.
 """
 
 from nonebot import get_driver, logger, get_plugin_config
@@ -24,12 +22,23 @@ from .config import Config
 
 # Get driver and config
 driver = get_driver()
-plugin_config = get_plugin_config(Config)
 
 
 @driver.on_startup
 async def on_startup():
     """Initialize the load balancer on startup"""
+    # Lazy import to avoid plugin detection issues
+    from .balancer import init_balancer
+    from .interceptor import init_interceptor
+
+    # Initialize balancer and interceptor
+    init_balancer()
+    init_interceptor()
+
+    from .interceptor import get_interceptor
+    from .config import ScopedConfig
+
+    plugin_config = get_plugin_config(Config).bot_load_balancer
     logger.info("[Bot Load Balancer] Starting up...")
     logger.info(
         "[Bot Load Balancer] Config: "
@@ -37,18 +46,8 @@ async def on_startup():
         f"min_reply_interval={plugin_config.min_reply_interval}s"
     )
 
-    # Lazy import to avoid plugin detection issues
-    from .balancer import init_balancer
-    from .interceptor import init_interceptor
-
-    # Initialize balancer and interceptor
-    init_balancer(plugin_config)
-    init_interceptor(plugin_config)
-
     if plugin_config.enabled:
         try:
-            from .interceptor import get_interceptor
-
             interceptor = get_interceptor()
             interceptor.patch_handle_event()
             logger.success("[Bot Load Balancer] Successfully patched event dispatch")
@@ -68,7 +67,8 @@ async def on_bot_connect(bot: Bot):
     """Log newly connected bots and ensure dispatch patch is active."""
     logger.info(f"[Bot Load Balancer] Bot {bot.self_id} connected")
 
-    if not plugin_config.enabled:
+    from .config import Config
+    if not get_plugin_config(Config).bot_load_balancer.enabled:
         return
 
     try:
@@ -90,7 +90,8 @@ async def on_bot_disconnect(bot: Bot):
     """
     logger.info(f"[Bot Load Balancer] Bot {bot.self_id} disconnected")
 
-    if not plugin_config.enabled:
+    from .config import Config
+    if not get_plugin_config(Config).bot_load_balancer.enabled:
         return
 
     try:
@@ -108,7 +109,8 @@ async def on_shutdown():
     """Clean up on shutdown"""
     logger.info("[Bot Load Balancer] Shutting down...")
 
-    if not plugin_config.enabled:
+    from .config import Config
+    if not get_plugin_config(Config).bot_load_balancer.enabled:
         return
 
     try:

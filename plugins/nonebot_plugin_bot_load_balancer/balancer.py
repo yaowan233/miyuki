@@ -7,10 +7,19 @@ This module implements a reply-throttling based bot selection strategy.
 from datetime import datetime, timedelta
 from typing import Optional
 
-from nonebot import get_bots, logger
+from nonebot import get_bots, get_plugin_config, logger
 from nonebot.adapters import Bot
 
-from .config import Config
+from .config import Config, ScopedConfig
+
+_config: ScopedConfig | None = None
+
+
+def _get_config() -> ScopedConfig:
+    global _config
+    if _config is None:
+        _config = get_plugin_config(Config).bot_load_balancer
+    return _config
 
 
 class BotLoadBalancer:
@@ -21,8 +30,7 @@ class BotLoadBalancer:
     - Round-robin tie breaking within the same session
     """
 
-    def __init__(self, config: Config):
-        self.config = config
+    def __init__(self):
         self._last_bot_cache: dict[str, str] = {}
         self._global_last_reply_at: dict[str, datetime] = {}
         self._round_robin_index: dict[str, int] = {}
@@ -44,7 +52,8 @@ class BotLoadBalancer:
         Returns:
             Selected Bot instance, or None if no bots available
         """
-        if not self.config.enabled:
+        config = _get_config()
+        if not config.enabled:
             return None
 
         bots = candidate_bots if candidate_bots is not None else get_bots()
@@ -63,7 +72,7 @@ class BotLoadBalancer:
             return next(iter(bots.values()))
 
         # Check sticky session.
-        use_sticky = sticky if sticky is not None else self.config.sticky_session
+        use_sticky = sticky if sticky is not None else config.sticky_session
         if use_sticky and session_id in self._last_bot_cache:
             last_bot_id = self._last_bot_cache[session_id]
             if last_bot_id in bots:
@@ -73,7 +82,7 @@ class BotLoadBalancer:
                 return bots[last_bot_id]
 
         current_time = datetime.now()
-        min_reply_delta = timedelta(seconds=self.config.min_reply_interval)
+        min_reply_delta = timedelta(seconds=config.min_reply_interval)
 
         # Step 1: Filter out bots that replied too recently (within min_reply_interval)
         cooled_bots = {
@@ -190,8 +199,8 @@ def get_balancer() -> BotLoadBalancer:
     return _balancer
 
 
-def init_balancer(config: Config):
+def init_balancer():
     """Initialize the global balancer instance"""
     global _balancer
-    _balancer = BotLoadBalancer(config)
+    _balancer = BotLoadBalancer()
     logger.success("[Bot Load Balancer] Balancer initialized")
