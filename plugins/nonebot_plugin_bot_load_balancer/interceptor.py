@@ -10,7 +10,7 @@ import asyncio
 import time
 from typing import Any
 
-from nonebot import get_bots, logger
+from nonebot import get_bots, get_driver, logger
 from nonebot.adapters import Bot, Event
 
 from .balancer import get_balancer
@@ -32,7 +32,64 @@ class BotEventInterceptor:
         self._event_pair_wait = 0.05
         self._resolved_event_ttl = 0.5
         self._current_event_context: dict[str, Event] = {}  # Track current event per bot
+        self._send_dedup_lock = asyncio.Lock()
+        self._pending_sends: dict[str, str] = {}  # Maps send_key -> bot_id that will send
+        self._send_wait = 0.05  # Wait time for send deduplication
+        
+        # Get COMMAND_START from NoneBot config
+        try:
+            driver_config = get_driver().config
+            self._command_start = getattr(driver_config, "command_start", {"/"})
+            logger.debug(f"[Bot Load Balancer] Using COMMAND_START: {self._command_start}")
+        except Exception as e:
+            logger.warning(f"[Bot Load Balancer] Failed to get COMMAND_START, using default: {e}")
+            self._command_start = {"/"}
 
+    async def _should_send(self, bot_id: str, session_id: str, message_preview: str) -> bool:
+        """
+        Deduplicate send requests from multiple bots for the same logical response.
+        Returns True if this bot should send, False if another bot is already sending.
+        """
+        send_key = f"{session_id}:{message_preview[:50]}"  # Use session + message preview as key
+        
+        async with self._send_dedup_lock:
+            if send_key in self._pending_sends:
+                assigned_bot = self._pending_sends[send_key]
+                if assigned_bot != bot_id:
+                    logger.debug(
+                        f"[Bot Load Balancer] Bot {bot_id} skipping send - {assigned_bot} is already sending"
+                    )
+                    return False
+                return True
+            
+            # First bot to request, assign it
+            self._pending_sends[send_key] = bot_id
+            
+            # Schedule cleanup after a short delay
+            async def cleanup():
+                await asyncio.sleep(self._send_wait * 2)
+                async with self._send_dedup_lock:
+                    self._pending_sends.pop(send_key, None)
+            
+            asyncio.create_task(cleanup())
+            return True
+
+    def _is_at_bot(self, event: Event, bot_id: str) -> bool:
+        """Check if this event is @mentioning a specific bot."""
+        try:
+            # Check if event has to_me attribute (NoneBot's built-in @bot detection)
+            if hasattr(event, "to_me") and event.to_me:
+                # Check if message contains specific bot ID
+                raw_message = getattr(event, "raw_message", None) or str(
+                    getattr(event, "message", "")
+                )
+                # OneBot V11 CQ code format: [CQ:at,qq=bot_id]
+                if f"[CQ:at,qq={bot_id}]" in raw_message:
+                    return True
+        except Exception:
+            pass
+        return False
+    
     def _should_balance(self, event: Event) -> bool:
         """Check if this event should use load balancing."""
         if self._is_bot_message(event):
@@ -115,12 +172,13 @@ class BotEventInterceptor:
             else:
                 try:
                     balancer = get_balancer()
+                    # In send mode, use sticky session for event handling to maintain game state
                     selected_bot = await balancer.select_bot(
                         session_id,
                         candidate_bots={
                             bot_id: bot for bot_id, (bot, _, _) in arrivals.items()
                         },
-                        sticky=self.config.sticky_session,
+                        sticky=True,  # Always use sticky for event handling in send mode
                     )
                     if selected_bot is not None:
                         selected_bot_id = selected_bot.self_id
@@ -134,7 +192,7 @@ class BotEventInterceptor:
 
             logger.info(
                 f"[Bot Load Balancer] Paired event key {event_key} with {len(arrivals)} "
-                f"arrival(s), lag={lag_ms}ms, selected={selected_bot_id}"
+                f"arrival(s), lag={lag_ms}ms, selected={selected_bot_id} (sticky=true)"
             )
 
             if selected_bot_id != first_arrival_bot_id:
@@ -226,14 +284,77 @@ class BotEventInterceptor:
                     event: Event,
                     __original_handle_event=original_handle_event,
                 ):
-                    # In 'send' mode, only primary bot handles events
+                    # In 'send' mode, deduplicate events but allow @bot, skip_balance_commands, and normal chat
                     if self.config.balance_mode == "send":
-                        primary_bot_id = self.config.primary_bot_id or min(get_bots().keys())
-                        if bot_self.self_id != primary_bot_id:
-                            # Not primary bot, skip this event
+                        primary_bot_ids = self.config.primary_bot_id_list
+                        # If no primary bots configured, all bots can handle events
+                        if primary_bot_ids and bot_self.self_id not in primary_bot_ids:
+                            # Not a primary bot, skip this event
                             return None
                         
-                        # Primary bot, store context and handle
+                        # Check if this event specifically @mentions this bot
+                        is_at_this_bot = self._is_at_bot(event, bot_self.self_id)
+                        
+                        # Check if message is a command (starts with COMMAND_START)
+                        is_command = False
+                        is_skip_command = False
+                        try:
+                            raw_message = getattr(event, "raw_message", None) or str(
+                                getattr(event, "message", "")
+                            )
+                            stripped = raw_message.strip()
+                            
+                            # Check if it's a command (starts with COMMAND_START prefix)
+                            for prefix in self._command_start:
+                                if stripped.startswith(prefix):
+                                    is_command = True
+                                    break
+                            
+                            # Check if it's a skip_balance command
+                            for skip_cmd in self.config.skip_balance_commands:
+                                if stripped.startswith(f"{skip_cmd}") or stripped == skip_cmd:
+                                    is_skip_command = True
+                                    logger.debug(
+                                        f"[Bot Load Balancer] Message matches skip_balance_commands: {skip_cmd}"
+                                    )
+                                    break
+                        except Exception:
+                            pass
+                        
+                        # Deduplicate only for:
+                        # 1. Commands (starts with /, !)
+                        # 2. Not @mentioned this bot
+                        # 3. Not a skip_balance command
+                        should_deduplicate = is_command and not is_at_this_bot and not is_skip_command
+                        
+                        if self._should_balance(event) and should_deduplicate:
+                            selected_bot_id = await self._pair_event(bot_self, event)
+                            if selected_bot_id is None:
+                                logger.debug(
+                                    f"[Bot Load Balancer] Bot {bot_self.self_id} skipped duplicate command"
+                                )
+                                return None
+                            
+                            if selected_bot_id and selected_bot_id != bot_self.self_id:
+                                logger.debug(
+                                    f"[Bot Load Balancer] Bot {bot_self.self_id} deferred to {selected_bot_id}"
+                                )
+                                return None
+                        
+                        if is_at_this_bot:
+                            logger.info(
+                                f"[Bot Load Balancer] Bot {bot_self.self_id} handling event (was @mentioned)"
+                            )
+                        elif is_skip_command:
+                            logger.info(
+                                f"[Bot Load Balancer] Bot {bot_self.self_id} handling event (skip_balance command, no dedup)"
+                            )
+                        elif not is_command:
+                            logger.debug(
+                                f"[Bot Load Balancer] Bot {bot_self.self_id} handling normal chat (no dedup)"
+                            )
+                        
+                        # Store current event context for this bot (for send-time balancing)
                         self._current_event_context[bot_self.self_id] = event
                         try:
                             return await __original_handle_event(bot_self, event)
@@ -311,21 +432,58 @@ class BotEventInterceptor:
                     if api in ["send_msg", "send_group_msg", "send_private_msg"]:
                         # Try to get session from current event context or API data
                         session_id = None
+                        group_id = None
+                        
                         if bot_self.self_id in interceptor_self._current_event_context:
                             event = interceptor_self._current_event_context[bot_self.self_id]
                             session_id = interceptor_self._get_session_id(event)
+                            if hasattr(event, "group_id"):
+                                group_id = event.group_id
                         elif "group_id" in data:
                             session_id = str(data["group_id"])
+                            group_id = data["group_id"]
                         elif "user_id" in data:
                             session_id = str(data["user_id"])
                         
                         # In 'send' mode, select a different bot to actually send
                         if interceptor_self.config.balance_mode == "send" and session_id:
                             try:
+                                # Filter bots: only those in the target group (if it's a group message)
+                                # or those who have the user as friend (if it's a private message)
+                                all_bots = get_bots()
+                                candidate_bots = all_bots
+                                
+                                if group_id is not None:
+                                    # Check which bots are actually in this group
+                                    bots_in_group = {}
+                                    for bot_id, bot in all_bots.items():
+                                        try:
+                                            # Try to get group member list to verify bot is in group
+                                            await bot.get_group_member_list(group_id=group_id)
+                                            bots_in_group[bot_id] = bot
+                                        except Exception:
+                                            # Bot not in group or no permission
+                                            logger.debug(
+                                                f"[Bot Load Balancer] Bot {bot_id} not in group {group_id}"
+                                            )
+                                    
+                                    if bots_in_group:
+                                        candidate_bots = bots_in_group
+                                        logger.debug(
+                                            f"[Bot Load Balancer] Found {len(bots_in_group)} bots in group {group_id}: {list(bots_in_group.keys())}"
+                                        )
+                                else:
+                                    # Private message - only use the bot that received the message
+                                    # to avoid sending from a bot the user hasn't befriended
+                                    candidate_bots = {bot_self.self_id: bot_self}
+                                    logger.debug(
+                                        f"[Bot Load Balancer] Private message - using receiving bot {bot_self.self_id}"
+                                    )
+                                
                                 balancer = get_balancer()
                                 selected_bot = await balancer.select_bot(
                                     session_id,
-                                    candidate_bots=get_bots(),
+                                    candidate_bots=candidate_bots,
                                     sticky=interceptor_self.config.sticky_session,
                                 )
                                 

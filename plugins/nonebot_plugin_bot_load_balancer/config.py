@@ -48,10 +48,18 @@ class Config(BaseModel):
         description="Load balance mode: 'event' or 'send'",
     )
 
-    # Primary bot for event handling (only used in 'send' mode)
-    # If empty, uses the first connected bot
-    primary_bot_id: str = Field(
+    # Primary bots for event handling (only used in 'send' mode)
+    # If empty, all bots will handle events
+    # Can be a comma-separated list of bot IDs
+    primary_bot_ids: str = Field(
         default="",
-        validation_alias="bot_load_balancer__primary_bot_id",
-        description="Primary bot ID for event handling in 'send' mode",
+        validation_alias="bot_load_balancer__primary_bot_ids",
+        description="Primary bot IDs for event handling in 'send' mode (comma-separated)",
     )
+    
+    @property
+    def primary_bot_id_list(self) -> list[str]:
+        """Parse primary_bot_ids into a list"""
+        if not self.primary_bot_ids:
+            return []
+        return [bid.strip() for bid in self.primary_bot_ids.split(",") if bid.strip()]
