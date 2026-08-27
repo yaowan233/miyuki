@@ -5,8 +5,8 @@ This module patches adapter bot event handlers so a balanced bot is selected
 before the event reaches matchers.
 """
 
-import functools
 import asyncio
+import functools
 import time
 from typing import Any
 
@@ -39,7 +39,7 @@ class BotEventInterceptor:
         self._resolved_events: dict[str, float] = {}
         self._event_pair_wait = 0.05
         self._resolved_event_ttl = 0.5
-        self._current_event_context: dict[str, Event] = {}  # Track current event per bot
+        self._current_event_context: dict[str, list[Event]] = {}  # Stack per bot for concurrent events
         self._send_dedup_lock = asyncio.Lock()
         self._pending_sends: dict[str, str] = {}  # Maps send_key -> bot_id that will send
         self._send_wait = 0.05  # Wait time for send deduplication
@@ -294,15 +294,37 @@ class BotEventInterceptor:
                 ):
                     # In 'send' mode, deduplicate events but allow @bot, skip_balance_commands, and normal chat
                     if _get_config().balance_mode == "send":
+                        # Private messages must stay on the bot that received them.
+                        # Keep the context so private replies also bypass send-time balancing.
+                        if not self._get_session_id(event):
+                            self._current_event_context.setdefault(bot_self.self_id, []).append(event)
+                            try:
+                                return await __original_handle_event(bot_self, event)
+                            finally:
+                                stack = self._current_event_context.get(bot_self.self_id)
+                                if stack:
+                                    stack.pop()
+                                    if not stack:
+                                        del self._current_event_context[bot_self.self_id]
+
                         primary_bot_ids = _get_config().primary_bot_id_list
                         # If no primary bots configured, all bots can handle events
                         if primary_bot_ids and bot_self.self_id not in primary_bot_ids:
                             # Not a primary bot, skip this event
                             return None
-                        
+
                         # Check if this event specifically @mentions this bot
                         is_at_this_bot = self._is_at_bot(event, bot_self.self_id)
                         
+                        # If another bot was @mentioned, skip this event entirely
+                        if not is_at_this_bot:
+                            for bot_id in get_bots():
+                                if bot_id != bot_self.self_id and self._is_at_bot(event, bot_id):
+                                    logger.debug(
+                                        f"[Bot Load Balancer] Bot {bot_self.self_id} skipping - other bot was @mentioned"
+                                    )
+                                    return None
+
                         # Check if message is a command (starts with COMMAND_START)
                         is_command = False
                         is_skip_command = False
@@ -368,12 +390,16 @@ class BotEventInterceptor:
                                 f"[Bot Load Balancer] Bot {bot_self.self_id} handling normal chat (no dedup)"
                             )
                         
-                        # Store current event context for this bot (for send-time balancing)
-                        self._current_event_context[bot_self.self_id] = event
+                        # Push event onto stack (supports concurrent events)
+                        self._current_event_context.setdefault(bot_self.self_id, []).append(event)
                         try:
                             return await __original_handle_event(bot_self, event)
                         finally:
-                            self._current_event_context.pop(bot_self.self_id, None)
+                            stack = self._current_event_context.get(bot_self.self_id)
+                            if stack:
+                                stack.pop()
+                                if not stack:
+                                    del self._current_event_context[bot_self.self_id]
                     
                     # Original 'event' mode logic
                     if not self._should_balance(event):
@@ -391,14 +417,18 @@ class BotEventInterceptor:
                     if selected_bot_id and selected_bot_id != bot_self.self_id:
                         return None
 
-                    # Store current event context for this bot
-                    self._current_event_context[bot_self.self_id] = event
+                    # Push event onto stack (supports concurrent events)
+                    self._current_event_context.setdefault(bot_self.self_id, []).append(event)
                     
                     try:
                         return await __original_handle_event(bot_self, event)
                     finally:
                         # Clean up event context
-                        self._current_event_context.pop(bot_self.self_id, None)
+                        stack = self._current_event_context.get(bot_self.self_id)
+                        if stack:
+                            stack.pop()
+                            if not stack:
+                                del self._current_event_context[bot_self.self_id]
 
                 bot_class.handle_event = intercepted_handle_event
                 patched_classes += 1
@@ -449,10 +479,12 @@ class BotEventInterceptor:
                         group_id = None
                         
                         if bot_self.self_id in interceptor_self._current_event_context:
-                            event = interceptor_self._current_event_context[bot_self.self_id]
-                            session_id = interceptor_self._get_session_id(event)
-                            if hasattr(event, "group_id"):
-                                group_id = event.group_id
+                            event_stack = interceptor_self._current_event_context[bot_self.self_id]
+                            if event_stack:
+                                event = event_stack[-1]
+                                session_id = interceptor_self._get_session_id(event)
+                                if hasattr(event, "group_id"):
+                                    group_id = event.group_id
                         elif "group_id" in data:
                             session_id = str(data["group_id"])
                             group_id = data["group_id"]
